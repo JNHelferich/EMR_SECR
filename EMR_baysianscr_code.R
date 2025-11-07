@@ -448,7 +448,7 @@ samples <- rbind(samplesList[[1]], #Combining the two chains
 
 library(basicMCMCplots) #Trace plots
 chainsPlot(samplesList,
-           var = c("N.ocel", "N.bob", "sigma", "lam0", "sexratio", "b0.ocel", "b1.ocel"))
+           var = c("N.sp", "N.su", "N.fa", "sigma", "lam0", "sexratio", "b0.sp", "b1.sp", "b2"))
 
 summary(samplesList)
 
