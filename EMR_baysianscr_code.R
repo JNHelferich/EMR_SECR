@@ -247,7 +247,7 @@ emrdata <- emrdata[emrdata$Species == "S. catenatus", ] #Filtering to the specie
 emrdata <- emrdata[c("Year", "Date", "Month", "DOY", "ELF.ID", "SVL..cm.", 
                      "Age.Class", "UTM.Easting", "UTM.Northing", "M", "F")] #Filtering to the columns we want
 
-emrdata$Sex <- ifelse(emrdata$M == "1", 2, 1) #Designating sex, technically this just groups into male and non-male
+emrdata$Sex <- ifelse(emrdata$M == "1", 1, 0) #Designating sex, technically this just groups into male and non-male
 
 emrdata$Season <- ifelse(emrdata$Month == "February" | emrdata$Month == "March" | emrdata$Month == "April" | emrdata$Month == "May", 1, 
                          ifelse(emrdata$Month == "June" | emrdata$Month == "July" | emrdata$Month == "August", 2, 3)) #temporary seasn indicator (1 = spring, 2 = summer, 3 = fall)
@@ -272,12 +272,135 @@ emrdata <- emrdata[!is.na(emrdata$UTM.Easting), ]
 
 emrdata <- cbind(emrdata, emrdata.1) #C binds both the datasets together
 
-#Need to assign occassions
+emrdata$DOY <- as.numeric(emrdata$DOY)
+emrdata$SVL..cm. <- as.numeric(emrdata$SVL..cm.)
 
 
-emr_CH <- emrdata[c("ELF.ID", "to_id")]
+#Seperate into seasons
+emr_spring <- emrdata[emrdata$Season == 1,]
+emr_summer <- emrdata[emrdata$Season == 2,]
+emr_fall <- emrdata[emrdata$Season == 3,]
 
-emr_CH
+#Assign each capture to a two week occassion (this will need to be fixed eventually)
+emr_spring$occasion <- floor((emr_spring$DOY - 88)/14) + 1
+emr_summer$occasion <- floor((emr_summer$DOY - 152)/14) + 1
+emr_fall$occasion <- floor((emr_fall$DOY - 245)/14) + 1
+
+K.sp <- 5
+K.sp <- 7
+K.sp <- 4
+
+#Create edf's using oscr package
+edf_spring <- emr_spring[c("ELF.ID", "occasion", "to_id", "Sex")]
+edf_summer <- emr_summer[c("ELF.ID", "occasion", "to_id", "Sex")]
+edf_fall <- emr_fall[c("ELF.ID", "occasion", "to_id", "Sex")]
+
+
+edf_spring$session <- 1
+edf_summer$session <- 1
+edf_fall$session <- 1
+
+edf_spring <- edf_spring %>% relocate(session)
+edf_summer <- edf_summer %>% relocate(session)
+edf_fall <- edf_fall %>% relocate(session)
+
+
+#make better tedf
+traps_oscr <- as.data.frame(traps.vect, geom = "XY")
+traps_oscr <- traps_oscr[,-1]
+#traps_oscr$Detector <- traps_oscr$detector
+#traps_oscr <- traps_oscr[,-1]
+
+
+edf_spring$session <- as.integer(edf_spring$session)
+edf_spring$occasion <- as.integer(edf_spring$occasion)
+edf_spring$to_id <- as.character(edf_spring$to_id)
+
+traps_oscr$detector <- as.character(traps_oscr$detector)
+
+#oSCR time! - spring
+CH_spring_oscr <- data2oscr(edf = edf_spring, #Makes oscr scrframe from data
+                       tdf = list(traps_oscr),
+                       sess.col = 1,
+                       id.col = 2,
+                       occ.col = 3,
+                       trap.col = 4,
+                       sex.col = 5,
+                       K = 5,
+                       ntraps = nrow(traps_oscr))
+
+sex.real.sp <- (CH_spring_oscr$sex[[1]])
+sex.real.sp <- sex.real.sp$sex
+yy.sp <- CH_spring_oscr$y3d #Turns 3 dimensional capture history into its own object
+orders.sp <- c(1:244) #Makes vector to rename individuals
+yy.sp <- yy.sp[[1]] #Makes 3d CH a stan alone vector
+rownames(yy.sp) <- orders.sp #Applies new rownames
+n.sp <- apply(yy.sp, c(2,3), sum) #Matrix of how often each trap is used in each occasion
+
+N.sp = 244
+
+traps2 <- traps_oscr
+traps2$X <- traps$xscale
+traps2$Y <- traps$yscale
+traps2 <- traps2[,-c(2,3)]
+
+names(edf_spring) <- c("session", "id", "occ", "trap", "sex")#Renaming capture and trap data frames
+names(traps2) <- c("trap", "x", "y")
+CH.sp <- inner_join(edf_spring, traps2, by = "trap")# Joining trap and capture dataframes to get activity centers
+ac.coords.sp <- aggregate(cbind(x, y) ~ id, data = CH.sp, mean)#Taking average location of captures per individual (could not figure out how to do it using oscr object, thought I could)
+#Assigns pixel to each activity center for use as initial value
+ac.coords.sp <- vect(ac.coords.sp, geom = c("x", "y"))
+habcov$id <- 1:SS_size
+habcov.rast <- as_spatraster(habcov, xycols = c(4, 5))
+ac.sp <- terra::extract(habcov.rast, ac.coords.sp)
+ac.sp <- ac.sp$id
+
+
+
+#oSCR time! - fall
+#Fix sex discrepencies
+edf_fall$Sex <- ave(edf_fall$Sex, edf_fall$ELF.ID, FUN = min)
+
+CH_fall_oscr <- data2oscr(edf = edf_fall, #Makes oscr scrframe from data
+                            tdf = list(traps_oscr),
+                            sess.col = 1,
+                            id.col = 2,
+                            occ.col = 3,
+                            trap.col = 4,
+                            sex.col = 5,
+                            K = 7,
+                            ntraps = nrow(traps_oscr))
+
+sex.real.fa <- (CH_fall_oscr$sex[[1]])
+sex.real.fa <- sex.real.fa$sex
+yy.fa <- CH_fall_oscr$y3d #Turns 3 dimensional capture history into its own object
+orders.fa <- c(1:213) #Makes vector to rename individuals
+yy.fa <- yy.fa[[1]] #Makes 3d CH a stan alone vector
+rownames(yy.fa) <- orders.fa #Applies new rownames
+n.fa <- apply(yy.fa, c(2,3), sum) #Matrix of how often each trap is used in each occasion
+
+N.fa = 213
+
+# traps2 <- traps_oscr
+# traps2$X <- traps$xscale
+# traps2$Y <- traps$yscale
+# traps2 <- traps2[,-c(2,3)]
+
+names(edf_fall) <- c("session", "id", "occ", "trap", "sex")#Renaming capture and trap data frames
+names(traps2) <- c("trap", "x", "y")
+edf_fall$trap <- as.character(edf_fall$trap)
+CH.fa <- inner_join(edf_fall, traps2, by = "trap")# Joining trap and capture dataframes to get activity centers
+ac.coords.fa <- aggregate(cbind(x, y) ~ id, data = CH.fa, mean)#Taking average location of captures per individual (could not figure out how to do it using oscr object, thought I could)
+#Assigns pixel to each activity center for use as initial value
+ac.coords.fa <- vect(ac.coords.fa, geom = c("x", "y"))
+habcov$id <- 1:SS_size
+habcov.rast <- as_spatraster(habcov, xycols = c(4, 5))
+ac.fa <- terra::extract(habcov.rast, ac.coords.fa)
+ac.fa <- ac.fa$id
+
+
+
+
 
 
 ########################## Model Code ##########################
