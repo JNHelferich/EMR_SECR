@@ -234,6 +234,52 @@ viz_traps +
 
 
 
+#########################
+#Bring in Real Data
+
+raw <- read.csv("EMR_data.csv")#Bring in Raw data
+
+desired.years <- c(2011, 2012, 2013, 2014)
+emrdata <- raw[raw$Year %in% desired.years, ] #subset to only desired years
+
+emrdata <- emrdata[emrdata$Species == "S. catenatus", ] #Filtering to the species we want
+
+emrdata <- emrdata[c("Year", "Date", "Month", "DOY", "ELF.ID", "SVL..cm.", 
+                     "Age.Class", "UTM.Easting", "UTM.Northing", "M", "F")] #Filtering to the columns we want
+
+emrdata$Sex <- ifelse(emrdata$M == "1", 2, 1) #Designating sex, technically this just groups into male and non-male
+
+emrdata$Season <- ifelse(emrdata$Month == "February" | emrdata$Month == "March" | emrdata$Month == "April" | emrdata$Month == "May", 1, 
+                         ifelse(emrdata$Month == "June" | emrdata$Month == "July" | emrdata$Month == "August", 2, 3)) #temporary seasn indicator (1 = spring, 2 = summer, 3 = fall)
+
+#Assigning traps based on location
+emrdata$UTM.Easting <- as.numeric(emrdata$UTM.Easting)
+emrdata$UTM.Northing <- as.numeric(emrdata$UTM.Northing)
+emr_points <- vect(emrdata, geom = c("UTM.Easting", "UTM.Northing"), crs = traps.vect) #Turning the locations into a vector data frame
+
+plot(traps.vect)
+plot(emr_points, add = TRUE)
+
+traps.vect$detector <- seq(1:nrow(traps.vect)) #Adding trap names
+
+emr_points <- nearest(emr_points, traps.vect) #Assigning each capture location to the nearest trap
+
+emrdata.1 <- as.data.frame(emr_points) #Converts it back to data frame
+
+#Remove NAs from original data emr data data frame
+emrdata <- emrdata[!is.na(emrdata$UTM.Easting), ]
+
+
+emrdata <- cbind(emrdata, emrdata.1) #C binds both the datasets together
+
+#Need to assign occassions
+
+
+emr_CH <- emrdata[c("ELF.ID", "to_id")]
+
+emr_CH
+
+
 ########################## Model Code ##########################
 
 #Define the nimble model
