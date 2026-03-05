@@ -13,7 +13,7 @@ library(landscapetools)
 library(basicMCMCplots)
 library(oSCR)
 library(abind)
-
+library(tidyterra)
 
 
 
@@ -55,6 +55,18 @@ water.dist <- mask(water.dist, traps_buffer)
 habcov<- as.data.frame(water.dist$lyr.1, xy = TRUE)
 colnames(habcov) <- c("x", "y", "wtr")
 SS_size <- nrow(habcov)
+
+#Creat NDVI covriate
+east_study <- rast("east_study.tif")
+west_study <- rast("west_study.tif")
+
+NAIP <- mosaic(east_study, west_study)
+ndvi <- (NAIP[[4]] - NAIP[[1]]) / (NAIP[[4]] + NAIP[[1]])
+ndvi_resample <- resample(ndvi, template_raster, method = "average")
+ndvi_mask <- mask(ndvi_resample, traps_buffer)
+ndvi.df <- as.data.frame(ndvi_mask$east_study_4, xy = TRUE)
+habcov <- cbind(habcov, ndvi.df$east_study_4)
+colnames(habcov) <- c("x", "y", "wtr", "ndvi")
 
 #Scale waterdist
 habcov$wtr <- scale(habcov$wtr)
@@ -287,8 +299,8 @@ emr_summer$occasion <- floor((emr_summer$DOY - 152)/14) + 1
 emr_fall$occasion <- floor((emr_fall$DOY - 245)/14) + 1
 
 K.sp <- 5
-K.sp <- 7
-K.sp <- 4
+K.su <- 7
+K.fa <- 4
 
 #Create edf's using oscr package
 edf_spring <- emr_spring[c("ELF.ID", "occasion", "to_id", "Sex")]
@@ -368,7 +380,7 @@ CH_fall_oscr <- data2oscr(edf = edf_fall, #Makes oscr scrframe from data
                             occ.col = 3,
                             trap.col = 4,
                             sex.col = 5,
-                            K = 7,
+                            K = 4,
                             ntraps = nrow(traps_oscr))
 
 sex.real.fa <- (CH_fall_oscr$sex[[1]])
@@ -400,7 +412,51 @@ ac.fa <- ac.fa$id
 
 
 
+#oSCR time! - summer
+#Fix sex discrepencies
+#edf_fall$Sex <- ave(edf_fall$Sex, edf_fall$ELF.ID, FUN = min)
 
+
+edf_summer$session <- as.integer(edf_summer$session)
+edf_summer$occasion <- as.integer(edf_summer$occasion)
+edf_summer$to_id <- as.character(edf_summer$to_id)
+
+CH_summer_oscr <- data2oscr(edf = edf_summer, #Makes oscr scrframe from data
+                          tdf = list(traps_oscr),
+                          sess.col = 1,
+                          id.col = 2,
+                          occ.col = 3,
+                          trap.col = 4,
+                          sex.col = 5,
+                          K = 7,
+                          ntraps = nrow(traps_oscr))
+
+sex.real.su <- (CH_summer_oscr$sex[[1]])
+sex.real.su <- sex.real.su$sex
+yy.su <- CH_summer_oscr$y3d #Turns 3 dimensional capture history into its own object
+orders.su <- c(1:283) #Makes vector to rename individuals
+yy.su <- yy.su[[1]] #Makes 3d CH a stan alone vector
+rownames(yy.su) <- orders.su #Applies new rownames
+n.su <- apply(yy.su, c(2,3), sum) #Matrix of how often each trap is used in each occasion
+
+N.su = 283
+
+# traps2 <- traps_oscr
+# traps2$X <- traps$xscale
+# traps2$Y <- traps$yscale
+# traps2 <- traps2[,-c(2,3)]
+
+names(edf_summer) <- c("session", "id", "occ", "trap", "sex")#Renaming capture and trap data frames
+names(traps2) <- c("trap", "x", "y")
+edf_summer$trap <- as.character(edf_summer$trap)
+CH.su <- inner_join(edf_summer, traps2, by = "trap")# Joining trap and capture dataframes to get activity centers
+ac.coords.su <- aggregate(cbind(x, y) ~ id, data = CH.su, mean)#Taking average location of captures per individual (could not figure out how to do it using oscr object, thought I could)
+#Assigns pixel to each activity center for use as initial value
+ac.coords.su <- vect(ac.coords.su, geom = c("x", "y"))
+habcov$id <- 1:SS_size
+habcov.rast <- as_spatraster(habcov, xycols = c(4, 5))
+ac.su <- terra::extract(habcov.rast, ac.coords.su)
+ac.su <- ac.su$id
 
 
 ########################## Model Code ##########################
@@ -409,7 +465,7 @@ ac.fa <- ac.fa$id
 code <- nimbleCode({
   sigma[1] ~ dunif(0, 3)  #Uniform prior for sigma
   sigma[2] ~ dunif(0, 3)
-  lam0 ~ dunif(-5, 5)     #Uniform prior for baseline detection
+  lam0 ~ dunif(-10, 10)     #Uniform prior for baseline detection
   sexratio ~ dbeta(1, 1)
   b0.sp ~ dnorm(0, sd=2)
   b0.su ~ dnorm(0, sd=2)
@@ -447,7 +503,7 @@ code <- nimbleCode({
     sex.sp[i] ~ dbern(sexratio)
     sex2.sp[i] <- sex.sp[i] + 1
     log(b.lam.sp[i, 1:J]) <- lam0 + b2*size.sp[i]
-    lam.sp[i,1:J] <- K*b.lam.sp[i, 1:J] * exp(-d2.sp[s.sp[i], 1:J] / (2 * sigma[sex2.sp[i]]^2)) * z.sp[i]  #Calculates actual detection rate
+    lam.sp[i,1:J] <- K.sp*b.lam.sp[i, 1:J] * exp(-d2.sp[s.sp[i], 1:J] / (2 * sigma[sex2.sp[i]]^2)) * z.sp[i]  #Calculates actual detection rate
     
     for(j in 1:J){
       yy.sp[i,j] ~ dpois(lam.sp[i, j])
@@ -461,7 +517,7 @@ code <- nimbleCode({
     sex.su[i] ~ dbern(sexratio)
     sex2.su[i] <- sex.su[i] + 1
     log(b.lam.su[i, 1:J]) <- lam0 + b2*size.su[i]
-    lam.su[i,1:J] <- K*b.lam.su[i, 1:J] * exp(-d2.su[s.su[i], 1:J] / (2 * sigma[sex2.su[i]]^2)) * z.su[i]  #Calculates actual detection rate
+    lam.su[i,1:J] <- K.su*b.lam.su[i, 1:J] * exp(-d2.su[s.su[i], 1:J] / (2 * sigma[sex2.su[i]]^2)) * z.su[i]  #Calculates actual detection rate
 
     for(j in 1:J){
       yy.su[i,j] ~ dpois(lam.su[i, j])
@@ -475,7 +531,7 @@ code <- nimbleCode({
     sex.fa[i] ~ dbern(sexratio)
     sex2.fa[i] <- sex.fa[i] + 1
     log(b.lam.fa[i, 1:J]) <- lam0 + b2*size.fa[i]
-    lam.fa[i,1:J] <- K*b.lam.fa[i, 1:J] * exp(-d2.fa[s.fa[i], 1:J] / (2 * sigma[sex2.fa[i]]^2)) * z.fa[i]  #Calculates actual detection rate
+    lam.fa[i,1:J] <- K.fa*b.lam.fa[i, 1:J] * exp(-d2.fa[s.fa[i], 1:J] / (2 * sigma[sex2.fa[i]]^2)) * z.fa[i]  #Calculates actual detection rate
     
     for(j in 1:J){
       yy.fa[i,j] ~ dpois(lam.fa[i, j])
@@ -493,10 +549,12 @@ code <- nimbleCode({
 
 
 J <- nrow(traps) # nb of traps
-K <- 10 # nb capture occasions
 
 
-M <- 100 #Number of data augmented individuals
+
+M <- 500 #Number of data augmented individuals
+
+
 
 #Create distance matrix to input as data
 d2=matrix(NA, nrow(habcov), nrow(traps))
@@ -513,17 +571,17 @@ yy.fa.k <- apply(yy.fa, c(1,2), sum)
 #Creating data augmented datasets
 yaug.sp <- matrix(0, M, n.traps)#Creating augmented dataset of individuals
 yaug.sp[1:N.sp, 1:n.traps] <- yy.sp.k
-sex.aug.sp <- c(sex.sp-1, rep(NA, M-N.sp))
+sex.aug.sp <- c(sex.real.sp, rep(NA, M-N.sp))
 size.aug.sp <- c(rnorm(N.sp, .5, .2), rep(NA, M-N.sp))
 
 yaug.su <- matrix(0, M, n.traps)#Creating augmented dataset of individuals
 yaug.su[1:N.su, 1:n.traps] <- yy.su.k
-sex.aug.su <- c(sex.su-1, rep(NA, M-N.su))
+sex.aug.su <- c(sex.real.su, rep(NA, M-N.su))
 size.aug.su <- c(rnorm(N.su, .5, .2), rep(NA, M-N.su))
 
 yaug.fa <- matrix(0, M, n.traps)#Creating augmented dataset of individuals
 yaug.fa[1:N.fa, 1:n.traps] <- yy.fa.k
-sex.aug.fa <- c(sex.fa-1, rep(NA, M-N.fa))
+sex.aug.fa <- c(sex.real.fa, rep(NA, M-N.fa))
 size.aug.fa <- c(rnorm(N.fa, .5, .2), rep(NA, M-N.fa))
 
 sex.init.sp <- c(rep(NA, N.sp), rbinom(M-N.sp, 1, 0.5))
@@ -540,9 +598,9 @@ size.init.fa <- c(rep(NA, N.fa), rnorm(M-N.fa, .5, 0.2))
 sinit.sp <- round(runif(M, 1, SS_size))
 sinit.su <- round(runif(M, 1, SS_size))
 sinit.fa <- round(runif(M, 1, SS_size))
-sinit.sp[1:40] <- ac.sp
-sinit.su[1:40] <- ac.su
-sinit.fa[1:40] <- ac.fa
+sinit.sp[1:N.sp] <- ac.sp
+sinit.su[1:N.su] <- ac.su
+sinit.fa[1:N.fa] <- ac.fa
 
 
 
@@ -553,7 +611,7 @@ zinit.fa <- c(rep(1, N.fa), rbinom(M-N.fa, 1, 0.5)) #individuals alive state
 
 #Defining constanst
 constants <- list(M = M, 
-                  K = K, #Occasions
+                  K.sp = K.sp, K.su = K.su, K.fa = K.fa, #Occasions
                   J = J,
                   SS_size = SS_size,
                   pixelarea = pixelarea) #put back in data #Traps
@@ -575,7 +633,7 @@ data <- list(yy.sp = yaug.sp, #Data input
 
 #Set inits
 inits <- list(sigma = c(1, 1),  #Inputs all these as initial values
-              lam0 = -2, 
+              lam0 = -4, 
               s.sp = sinit.sp,
               s.su = sinit.su, 
               s.fa = sinit.fa,
@@ -589,12 +647,13 @@ inits <- list(sigma = c(1, 1),  #Inputs all these as initial values
               size.sp = size.init.sp,
               size.su = size.init.su,
               size.fa = size.init.fa,
-              b0.sp = b0.sp,
-              b0.su = b0.su,
-              b0.fa = b0.fa,
-              b1.sp = b1.sp,
-              b1.su = b1.su,
-              b1.fa = b1.fa)
+              b0.sp = 0,
+              b0.su = 0,
+              b0.fa = 0,
+              b1.sp = 0,
+              b1.su = 0,
+              b1.fa = 0,
+              b2 = 0)
 
 #Fit the model
 Rmodel <- nimbleModel(code = code,  #This builds the model in R, but is not compiled yet.
@@ -607,10 +666,14 @@ conf <- configureMCMC(Rmodel, #Configures MCMC with monitors
                       monitors = c("N.sp", "N.su", "N.fa", "lam0", "psi.sp", "psi.su", "psi.fa", "sigma", "b0.sp", "b0.su", "b0.fa", "b1.sp", "b1.su", "b1.fa", "b2", "sexratio"))
 Rmcmc <- buildMCMC(conf)#Building the chains
 Cmcmc <- compileNimble(Rmcmc, project = Cmodel)#Compile in c++
+
+
 samplesList <- runMCMC(Cmcmc, #Run actual compiled model with 2 chains and 10000 iterations
                        niter = 1000,
-                       nburnin = 500,
-                       nchains = 1)
+                       nburnin = 200,
+                       nchains = 3)
+
+saveRDS(samplesList, "samplesList.RDS")
 
 samples <- rbind(samplesList[[1]], #Combining the two chains
                  samplesList[[2]])
